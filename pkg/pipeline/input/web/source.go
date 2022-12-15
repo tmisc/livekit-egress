@@ -13,6 +13,7 @@ import (
 
 	"github.com/livekit/egress/pkg/config"
 	"github.com/livekit/egress/pkg/errors"
+	"github.com/livekit/egress/pkg/pipeline/input/builder"
 	"github.com/livekit/protocol/logger"
 	"github.com/livekit/protocol/tracer"
 )
@@ -66,79 +67,19 @@ func (s *WebInput) launchXvfb(ctx context.Context, p *config.PipelineConfig) err
 }
 
 // launches chrome and navigates to the url
-func (s *WebInput) launchChrome(ctx context.Context, p *config.PipelineConfig, insecure bool) error {
+func (s *WebInput) launchChrome(ctx context.Context, p *config.PipelineConfig) error {
 	ctx, span := tracer.Start(ctx, "WebInput.launchChrome")
 	defer span.End()
 
-	webUrl := p.WebUrl
-	if webUrl == "" {
-		// create start and end channels
-		s.startRecording = make(chan struct{})
-		s.endRecording = make(chan struct{})
-
-		// build input url
-		inputUrl, err := url.Parse(p.TemplateBase)
-		if err != nil {
-			return err
-		}
-		values := inputUrl.Query()
-		values.Set("layout", p.Layout)
-		values.Set("url", p.WsUrl)
-		values.Set("token", p.Token)
-		inputUrl.RawQuery = values.Encode()
-		webUrl = inputUrl.String()
-	}
-
-	logger.Debugw("launching chrome", "url", webUrl)
+	logger.Debugw("launching chrome", "url", p.WebUrl)
 
 	opts := []chromedp.ExecAllocatorOption{
-		chromedp.NoFirstRun,
-		chromedp.NoDefaultBrowserCheck,
-		chromedp.DisableGPU,
-		chromedp.NoSandbox,
-
-		// puppeteer default behavior
-		chromedp.Flag("disable-infobars", true),
-		chromedp.Flag("excludeSwitches", "enable-automation"),
-		chromedp.Flag("disable-background-networking", true),
-		chromedp.Flag("enable-features", "NetworkService,NetworkServiceInProcess"),
-		chromedp.Flag("disable-background-timer-throttling", true),
-		chromedp.Flag("disable-backgrounding-occluded-windows", true),
-		chromedp.Flag("disable-breakpad", true),
-		chromedp.Flag("disable-client-side-phishing-detection", true),
-		chromedp.Flag("disable-default-apps", true),
-		chromedp.Flag("disable-dev-shm-usage", true),
-		chromedp.Flag("disable-extensions", true),
-		chromedp.Flag("disable-features", "site-per-process,TranslateUI,BlinkGenPropertyTrees"),
-		chromedp.Flag("disable-hang-monitor", true),
-		chromedp.Flag("disable-ipc-flooding-protection", true),
-		chromedp.Flag("disable-popup-blocking", true),
-		chromedp.Flag("disable-prompt-on-repost", true),
-		chromedp.Flag("disable-renderer-backgrounding", true),
-		chromedp.Flag("disable-sync", true),
-		chromedp.Flag("force-color-profile", "srgb"),
-		chromedp.Flag("metrics-recording-only", true),
-		chromedp.Flag("safebrowsing-disable-auto-update", true),
-		chromedp.Flag("password-store", "basic"),
-		chromedp.Flag("use-mock-keychain", true),
-
-		// custom args
-		chromedp.Flag("kiosk", true),
-		chromedp.Flag("enable-automation", false),
-		chromedp.Flag("autoplay-policy", "no-user-gesture-required"),
-		chromedp.Flag("window-position", "0,0"),
-		chromedp.Flag("window-size", fmt.Sprintf("%d,%d", p.Width, p.Height)),
-
-		// output
-		chromedp.Env(fmt.Sprintf("PULSE_SINK=%s", p.Info.EgressId)),
 		chromedp.Flag("display", p.Display),
+		chromedp.Flag("window-size", fmt.Sprintf("%d,%d", p.Width, p.Height)),
+		chromedp.Env(fmt.Sprintf("PULSE_SINK=%s", p.Info.EgressId)),
 	}
-
-	if insecure {
-		opts = append(opts,
-			chromedp.Flag("disable-web-security", true),
-			chromedp.Flag("allow-running-insecure-content", true),
-		)
+	for name, value := range builder.GetChromeFlags(p) {
+		opts = append(opts, chromedp.Flag(name, value))
 	}
 
 	allocCtx, _ := chromedp.NewExecAllocator(context.Background(), opts...)
@@ -197,7 +138,7 @@ func (s *WebInput) launchChrome(ctx context.Context, p *config.PipelineConfig, i
 
 	var errString string
 	err := chromedp.Run(chromeCtx,
-		chromedp.Navigate(webUrl),
+		chromedp.Navigate(p.WebUrl),
 		chromedp.Evaluate(`
 			if (document.querySelector('div.error')) {
 				document.querySelector('div.error').innerText;
@@ -210,4 +151,29 @@ func (s *WebInput) launchChrome(ctx context.Context, p *config.PipelineConfig, i
 		err = errors.New(errString)
 	}
 	return err
+}
+
+func (s *WebInput) updateWebUrl(p *config.PipelineConfig) error {
+	if p.WebUrl != "" {
+		return nil
+	}
+
+	if !p.CEF {
+		// create start and end channels
+		s.startRecording = make(chan struct{})
+		s.endRecording = make(chan struct{})
+	}
+
+	// build input url
+	inputUrl, err := url.Parse(p.TemplateBase)
+	if err != nil {
+		return err
+	}
+	values := inputUrl.Query()
+	values.Set("layout", p.Layout)
+	values.Set("url", p.WsUrl)
+	values.Set("token", p.Token)
+	inputUrl.RawQuery = values.Encode()
+	p.WebUrl = inputUrl.String()
+	return nil
 }

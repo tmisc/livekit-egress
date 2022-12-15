@@ -20,6 +20,8 @@ const Latency = uint64(41e8) // slightly larger than max audio latency
 type InputBin struct {
 	bin *gst.Bin
 
+	cef *CEFInput
+
 	audio    *AudioInput
 	audioPad *gst.Pad
 
@@ -33,6 +35,14 @@ type InputBin struct {
 func NewWebInput(ctx context.Context, p *config.PipelineConfig) (*InputBin, error) {
 	input := &InputBin{
 		bin: gst.NewBin("input"),
+	}
+
+	if p.CEF {
+		cef, err := NewCEFInput(p)
+		if err != nil {
+			return nil, err
+		}
+		input.cef = cef
 	}
 
 	if p.AudioEnabled {
@@ -91,6 +101,12 @@ func (b *InputBin) build(ctx context.Context, p *config.PipelineConfig) error {
 	defer span.End()
 
 	var err error
+	if b.cef != nil {
+		if err = b.cef.AddToBin(b.bin); err != nil {
+			return err
+		}
+	}
+
 	// add audio to bin
 	if b.audio != nil {
 		if err = b.audio.AddToBin(b.bin); err != nil {
@@ -157,6 +173,23 @@ func (b *InputBin) Element() *gst.Element {
 }
 
 func (b *InputBin) Link() error {
+	if b.cef != nil {
+		if err := b.cef.Link(); err != nil {
+			return err
+		}
+		if b.audio != nil {
+			// TODO: cefdemuxer is a sometimes pad?
+			if linkReturn := b.cef.demux.GetStaticPad("audio").Link(b.audio.GetSinkPad()); linkReturn != gst.PadLinkOK {
+				return errors.ErrPadLinkFailed("cef demux", "audio", linkReturn.String())
+			}
+		}
+		if b.video != nil {
+			if linkReturn := b.cef.demux.GetStaticPad("video").Link(b.video.GetSinkPad()); linkReturn != gst.PadLinkOK {
+				return errors.ErrPadLinkFailed("cef demux", "video", linkReturn.String())
+			}
+		}
+	}
+
 	mqPad := 0
 
 	// link audio elements

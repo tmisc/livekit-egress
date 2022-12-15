@@ -18,10 +18,16 @@ RUN apt-get update && \
         wget \
         xvfb
 
+# get gstcefsrc
+COPY --from=gstcefsrc /gstcefsrc/build gstcefsrc
+
 # install chrome
 COPY --from=livekit/chrome-installer:latest /chrome-installer /chrome-installer
 RUN /chrome-installer/install-chrome "$TARGETPLATFORM" && \
     rm -rf /chrome-installer
+
+# copy gstcefsrc
+COPY --from=gstcefsrc /gstcefsrc/build /gstcefsrc
 
 # install rtsp server
 RUN if [ "$TARGETPLATFORM" = "linux/arm64" ]; then ARCH=arm64v8; else ARCH=amd64; fi && \
@@ -41,6 +47,7 @@ RUN rm -rf /var/lib/apt/lists/* && \
 ENV PATH=${PATH}:/chrome
 ENV XDG_RUNTIME_DIR=$PATH:~/.cache/xdgr
 ENV RTSP_LOGDESTINATIONS=file
+ENV GST_PLUGIN_PATH=/gstcefsrc/Release
 
 # download go modules
 COPY go.mod .

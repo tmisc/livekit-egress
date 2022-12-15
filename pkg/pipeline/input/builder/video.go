@@ -20,7 +20,12 @@ type VideoInput struct {
 func NewWebVideoInput(p *config.PipelineConfig) (*VideoInput, error) {
 	v := &VideoInput{}
 
-	if err := v.buildWebDecoder(p); err != nil {
+	if !p.CEF {
+		if err := v.buildWebDecoder(p); err != nil {
+			return nil, err
+		}
+	}
+	if err := v.buildWebConverter(p); err != nil {
 		return nil, err
 	}
 	if err := v.buildEncoder(p); err != nil {
@@ -53,6 +58,10 @@ func (v *VideoInput) Link() error {
 	return gst.ElementLinkMany(v.elements...)
 }
 
+func (v *VideoInput) GetSinkPad() *gst.Pad {
+	return v.elements[0].GetStaticPad("sink")
+}
+
 func (v *VideoInput) GetSrcPad() *gst.Pad {
 	return getSrcPad(v.elements)
 }
@@ -71,7 +80,11 @@ func (v *VideoInput) buildWebDecoder(p *config.PipelineConfig) error {
 	if err = xImageSrc.SetProperty("show-pointer", false); err != nil {
 		return err
 	}
+	v.elements = []*gst.Element{xImageSrc}
+	return nil
+}
 
+func (v *VideoInput) buildWebConverter(p *config.PipelineConfig) error {
 	videoQueue, err := buildQueue()
 	if err != nil {
 		return err
@@ -92,12 +105,12 @@ func (v *VideoInput) buildWebDecoder(p *config.PipelineConfig) error {
 		return err
 	}
 	if err = caps.SetProperty("caps", gst.NewCapsFromString(
-		fmt.Sprintf("video/x-raw,framerate=%d/1", p.Framerate),
+		fmt.Sprintf("video/x-raw,width=%d,height=%d,framerate=%d/1", p.Width, p.Height, p.Framerate),
 	)); err != nil {
 		return err
 	}
 
-	v.elements = []*gst.Element{xImageSrc, videoQueue, videoConvert, videoRate, caps}
+	v.elements = append(v.elements, videoQueue, videoConvert, videoRate, caps)
 	return nil
 }
 

@@ -23,7 +23,16 @@ type AudioInput struct {
 func NewWebAudioInput(p *config.PipelineConfig) (*AudioInput, error) {
 	a := &AudioInput{}
 
-	if err := a.buildWebDecoder(p); err != nil {
+	if p.CEF {
+		if err := a.buildMixer(p); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := a.buildWebDecoder(p); err != nil {
+			return nil, err
+		}
+	}
+	if err := a.buildConverter(p); err != nil {
 		return nil, err
 	}
 	if err := a.buildEncoder(p); err != nil {
@@ -36,7 +45,10 @@ func NewWebAudioInput(p *config.PipelineConfig) (*AudioInput, error) {
 func NewSDKAudioInput(p *config.PipelineConfig, src *app.Source, codec webrtc.RTPCodecParameters) (*AudioInput, error) {
 	a := &AudioInput{}
 
-	if err := a.buildSDKDecoder(p, src, codec); err != nil {
+	if err := a.buildSDKDecoder(src, codec); err != nil {
+		return nil, err
+	}
+	if err := a.buildConverter(p); err != nil {
 		return nil, err
 	}
 	if err := a.buildMixer(p); err != nil {
@@ -114,6 +126,10 @@ func (a *AudioInput) Link() error {
 	return nil
 }
 
+func (a *AudioInput) GetSinkPad() *gst.Pad {
+	return a.decoder[0].GetStaticPad("sink")
+}
+
 func (a *AudioInput) GetSrcPad() *gst.Pad {
 	if a.encoder != nil {
 		return a.encoder.GetStaticPad("src")
@@ -134,10 +150,10 @@ func (a *AudioInput) buildWebDecoder(p *config.PipelineConfig) error {
 	}
 
 	a.decoder = []*gst.Element{pulseSrc}
-	return a.addConverter(p)
+	return nil
 }
 
-func (a *AudioInput) buildSDKDecoder(p *config.PipelineConfig, src *app.Source, codec webrtc.RTPCodecParameters) error {
+func (a *AudioInput) buildSDKDecoder(src *app.Source, codec webrtc.RTPCodecParameters) error {
 	src.Element.SetArg("format", "time")
 	if err := src.Element.SetProperty("is-live", true); err != nil {
 		return err
@@ -174,10 +190,10 @@ func (a *AudioInput) buildSDKDecoder(p *config.PipelineConfig, src *app.Source, 
 		return errors.ErrNotSupported(codec.MimeType)
 	}
 
-	return a.addConverter(p)
+	return nil
 }
 
-func (a *AudioInput) addConverter(p *config.PipelineConfig) error {
+func (a *AudioInput) buildConverter(p *config.PipelineConfig) error {
 	audioQueue, err := buildQueue()
 	if err != nil {
 		return err
