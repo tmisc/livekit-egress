@@ -18,9 +18,6 @@ RUN apt-get update && \
         wget \
         xvfb
 
-# get gstcefsrc
-COPY --from=gstcefsrc /gstcefsrc/build gstcefsrc
-
 # install chrome
 COPY --from=livekit/chrome-installer:latest /chrome-installer /chrome-installer
 RUN /chrome-installer/install-chrome "$TARGETPLATFORM" && \

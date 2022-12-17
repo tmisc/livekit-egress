@@ -41,7 +41,7 @@ RUN apt-get update && \
       libxtst6 \
       pkg-config
 
-RUN git clone https://github.com/centricular/gstcefsrc.git
+RUN git clone https://github.com/livekit/gstcefsrc.git
 RUN mkdir -p gstcefsrc/third_party/cef && mkdir gstcefsrc/build
 
 #COPY ./cef_binary_${CEF_VERSION}_linuxarm64.tar.bz2 gstcefsrc/third_party/cef

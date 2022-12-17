@@ -28,6 +28,9 @@ func NewCEFInput(p *config.PipelineConfig) (*CEFInput, error) {
 	if err = cefSrc.SetProperty("url", p.WebUrl); err != nil {
 		return nil, err
 	}
+	if err = cefSrc.SetProperty("await-console-message", StartRecordingMessage); err != nil {
+		return nil, err
+	}
 
 	flags := GetChromeFlags(p)
 	flagList := make([]string, 0, len(flags)*2)
@@ -36,7 +39,7 @@ func NewCEFInput(p *config.PipelineConfig) (*CEFInput, error) {
 		case bool:
 			flagList = append(flagList, name)
 		case string:
-			flagList = append(flagList, fmt.Sprintf("%s=%s", name, v))
+			flagList = append(flagList, fmt.Sprintf("%s=%s", name, strings.Replace(v, ",", "|", -1)))
 		}
 	}
 	if err = cefSrc.SetProperty("chrome-extra-flags", strings.Join(flagList, ",")); err != nil {

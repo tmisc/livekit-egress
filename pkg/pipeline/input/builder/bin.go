@@ -15,7 +15,11 @@ import (
 	"github.com/livekit/protocol/tracer"
 )
 
-const Latency = uint64(41e8) // slightly larger than max audio latency
+const (
+	StartRecordingMessage = "START_RECORDING"
+	EndRecordingMessage   = "END_RECORDING"
+	Latency               = uint64(41e8) // slightly larger than max audio latency
+)
 
 type InputBin struct {
 	bin *gst.Bin

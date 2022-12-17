@@ -75,6 +75,7 @@ func (s *WebInput) launchChrome(ctx context.Context, p *config.PipelineConfig) e
 
 	opts := []chromedp.ExecAllocatorOption{
 		chromedp.Flag("display", p.Display),
+		chromedp.Flag("window-start", "0,0"),
 		chromedp.Flag("window-size", fmt.Sprintf("%d,%d", p.Width, p.Height)),
 		chromedp.Env(fmt.Sprintf("PULSE_SINK=%s", p.Info.EgressId)),
 	}
@@ -109,7 +110,7 @@ func (s *WebInput) launchChrome(ctx context.Context, p *config.PipelineConfig) e
 				}
 
 				switch fmt.Sprint(val) {
-				case startRecordingLog:
+				case builder.StartRecordingMessage:
 					if s.startRecording != nil {
 						select {
 						case <-s.startRecording:
@@ -118,7 +119,7 @@ func (s *WebInput) launchChrome(ctx context.Context, p *config.PipelineConfig) e
 							close(s.startRecording)
 						}
 					}
-				case endRecordingLog:
+				case builder.EndRecordingMessage:
 					if s.endRecording != nil {
 						select {
 						case <-s.endRecording:
@@ -158,10 +159,10 @@ func (s *WebInput) updateWebUrl(p *config.PipelineConfig) error {
 		return nil
 	}
 
+	// create start and end channels
+	s.endRecording = make(chan struct{})
 	if !p.CEF {
-		// create start and end channels
 		s.startRecording = make(chan struct{})
-		s.endRecording = make(chan struct{})
 	}
 
 	// build input url

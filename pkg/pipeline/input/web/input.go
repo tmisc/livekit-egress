@@ -14,11 +14,6 @@ import (
 	"github.com/livekit/protocol/tracer"
 )
 
-const (
-	startRecordingLog = "START_RECORDING"
-	endRecordingLog   = "END_RECORDING"
-)
-
 type WebInput struct {
 	*builder.InputBin
 

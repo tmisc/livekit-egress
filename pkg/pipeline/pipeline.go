@@ -16,6 +16,7 @@ import (
 	"github.com/livekit/egress/pkg/config"
 	"github.com/livekit/egress/pkg/errors"
 	"github.com/livekit/egress/pkg/pipeline/input"
+	"github.com/livekit/egress/pkg/pipeline/input/builder"
 	"github.com/livekit/egress/pkg/pipeline/input/sdk"
 	"github.com/livekit/egress/pkg/pipeline/input/web"
 	"github.com/livekit/egress/pkg/pipeline/output"
@@ -31,6 +32,7 @@ const (
 	eosTimeout        = time.Second * 30
 	maxPendingUploads = 100
 
+	cefConsoleMessage     = "cefconsole"
 	fragmentOpenedMessage = "splitmuxsink-fragment-opened"
 	fragmentClosedMessage = "splitmuxsink-fragment-closed"
 	fragmentLocation      = "location"
@@ -172,6 +174,13 @@ func (p *Pipeline) Run(ctx context.Context) *livekit.EgressInfo {
 		p.cleanup()
 	}()
 
+	// session limit timer
+	p.startSessionLimitTimer(ctx)
+
+	// create loop, add watch
+	p.pipeline.GetPipelineBus().AddWatch(p.messageWatch)
+	p.loop = glib.NewMainLoop(glib.MainContextDefault(), false)
+
 	// wait until room is ready
 	start := p.in.StartRecording()
 	if start != nil {
@@ -191,13 +200,7 @@ func (p *Pipeline) Run(ctx context.Context) *livekit.EgressInfo {
 		p.SendEOS(ctx)
 	}()
 
-	// session limit timer
-	p.startSessionLimitTimer(ctx)
-
-	// add watch
-	p.loop = glib.NewMainLoop(glib.MainContextDefault(), false)
-	p.pipeline.GetPipelineBus().AddWatch(p.messageWatch)
-
+	logger.Debugw("set state playing")
 	// set state to playing (this does not start the pipeline)
 	if err := p.pipeline.SetState(gst.StatePlaying); err != nil {
 		span.RecordError(err)
@@ -279,6 +282,26 @@ func (p *Pipeline) Run(ctx context.Context) *livekit.EgressInfo {
 	return p.Info
 }
 
+func (p *Pipeline) startSessionLimitTimer(ctx context.Context) {
+	var timeout time.Duration
+
+	switch p.EgressType {
+	case types.EgressTypeFile:
+		timeout = p.FileOutputMaxDuration
+	case types.EgressTypeStream, types.EgressTypeWebsocket:
+		timeout = p.StreamOutputMaxDuration
+	case types.EgressTypeSegmentedFile:
+		timeout = p.SegmentOutputMaxDuration
+	}
+
+	if timeout > 0 {
+		p.limitTimer = time.AfterFunc(timeout, func() {
+			p.SendEOS(ctx)
+			p.Info.Status = livekit.EgressStatus_EGRESS_LIMIT_REACHED
+		})
+	}
+}
+
 func (p *Pipeline) messageWatch(msg *gst.Message) bool {
 	switch msg.Type() {
 	case gst.MessageEOS:
@@ -335,6 +358,25 @@ func (p *Pipeline) messageWatch(msg *gst.Message) bool {
 		s := msg.GetStructure()
 		if s != nil {
 			switch s.Name() {
+			case cefConsoleMessage:
+				level, _ := s.GetValue("level")
+				message, _ := s.GetValue("msg")
+				source, _ := s.GetValue("source")
+				line, _ := s.GetValue("line")
+
+				if message == builder.EndRecordingMessage {
+					select {
+					case <-p.in.EndRecording():
+					default:
+						close(p.in.EndRecording())
+					}
+				}
+
+				logger.Debugw(fmt.Sprintf("cef-console %s", level),
+					"msg", message,
+					"debug", fmt.Sprintf("%s:%d", source, line))
+				return true
+
 			case fragmentOpenedMessage:
 				filepath, t, err := getSegmentParamsFromGstStructure(s)
 				if err != nil {
@@ -497,26 +539,6 @@ func (p *Pipeline) close(ctx context.Context) {
 		if p.onStatusUpdate != nil {
 			p.onStatusUpdate(ctx, p.Info)
 		}
-	}
-}
-
-func (p *Pipeline) startSessionLimitTimer(ctx context.Context) {
-	var timeout time.Duration
-
-	switch p.EgressType {
-	case types.EgressTypeFile:
-		timeout = p.FileOutputMaxDuration
-	case types.EgressTypeStream, types.EgressTypeWebsocket:
-		timeout = p.StreamOutputMaxDuration
-	case types.EgressTypeSegmentedFile:
-		timeout = p.SegmentOutputMaxDuration
-	}
-
-	if timeout > 0 {
-		p.limitTimer = time.AfterFunc(timeout, func() {
-			p.SendEOS(ctx)
-			p.Info.Status = livekit.EgressStatus_EGRESS_LIMIT_REACHED
-		})
 	}
 }
 
