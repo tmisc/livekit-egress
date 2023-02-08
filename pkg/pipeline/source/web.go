@@ -23,7 +23,7 @@ import (
 
 const (
 	startRecordingLog = "START_RECORDING"
-	endRecordingLog   = "END_RECORDING"
+	endRecordingLog   = "END_RECORDINGE"
 )
 
 type WebSource struct {
