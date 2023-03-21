@@ -28,6 +28,7 @@ const (
 	videoTimeout = time.Second * 2
 	maxAudioLate = 200 // 4s for audio
 	audioTimeout = time.Second * 4
+	maxDropout   = 3000 // max sequence number skip
 )
 
 var (
@@ -257,14 +258,10 @@ func (w *AppWriter) pushBlankFrames() error {
 	}
 
 	// expected difference between packet timestamps
-	tsStep := w.rtpStep
-	if tsStep == 0 {
-		w.logger.Debugw("no timestamp step, guessing")
-		tsStep = w.track.Codec().ClockRate / (24000 / 1001)
-	}
+	frameSize := w.getFrameSize()
 
 	// expected packet duration in nanoseconds
-	frameDuration := time.Duration(float64(tsStep) * 1e9 / float64(w.track.Codec().ClockRate))
+	frameDuration := time.Duration(float64(frameSize) * 1e9 / float64(w.track.Codec().ClockRate))
 	ticker := time.NewTicker(frameDuration)
 	defer ticker.Stop()
 
@@ -288,9 +285,9 @@ func (w *AppWriter) pushBlankFrames() error {
 		if pkt != nil {
 			// once unmuted, next packet determines stopping point
 			// the blank frames will be ~500ms behind, and we need to fill the gap
-			maxTimestamp := pkt.Timestamp - tsStep
+			maxTimestamp := pkt.Timestamp - frameSize
 			for {
-				ts := w.lastTS + tsStep
+				ts := w.lastTS + frameSize
 				if ts > maxTimestamp {
 					// push packet to sample builder and return
 					w.sb.Push(pkt)
@@ -304,7 +301,7 @@ func (w *AppWriter) pushBlankFrames() error {
 		} else {
 			<-ticker.C
 			// push blank frame
-			if err = w.pushBlankFrame(w.lastTS + tsStep); err != nil {
+			if err = w.pushBlankFrame(w.lastTS + frameSize); err != nil {
 				return err
 			}
 		}
@@ -374,14 +371,20 @@ func (w *AppWriter) push(packets []*rtp.Packet, blankFrame bool) error {
 			// update sequence number
 			pkt.SequenceNumber += w.snOffset
 
-			// record timestamp diff
-			if w.rtpStep == 0 && w.lastTS != 0 && pkt.SequenceNumber == w.lastSN+1 {
-				if rtpStep := pkt.Timestamp - w.lastTS; rtpStep > 0 && rtpStep < uint32(maxUInt32/4) {
-					w.rtpStep = rtpStep
+			// record max frame size
+			if w.lastTS != 0 && pkt.SequenceNumber == w.lastSN+1 {
+				if frameSize := pkt.Timestamp - w.lastTS; frameSize > w.frameSize && frameSize < w.clockRate/60 {
+					w.frameSize = frameSize
 				}
 			}
 
 			w.translatePacket(pkt)
+		}
+
+		// reset offsets if needed
+		if w.lastTS != 0 && pkt.SequenceNumber-w.lastSN > maxDropout && w.lastSN-pkt.SequenceNumber > maxDropout {
+			w.logger.Debugw("large SN gap", "previous", w.lastSN, "current", pkt.SequenceNumber)
+			w.resetOffsets(pkt)
 		}
 
 		// get PTS
@@ -394,9 +397,7 @@ func (w *AppWriter) push(packets []*rtp.Packet, blankFrame bool) error {
 		w.lastSN = pkt.SequenceNumber
 		w.lastTS = pkt.Timestamp
 
-		if w.codec == types.MimeTypeOpus {
-			w.logger.Infow(".", "ts", pkt.Timestamp, "pts", pts, "offset", w.ptsOffset, "sn", pkt.SequenceNumber)
-		}
+		// w.logger.Infow(w.track.Kind().String(), "ts", pkt.Timestamp, "pts", pts, "offset", w.ptsOffset, "sn", pkt.SequenceNumber)
 
 		p, err := pkt.Marshal()
 		if err != nil {

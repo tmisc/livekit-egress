@@ -199,6 +199,9 @@ func (s *SDKSource) joinRoom(p *config.PipelineConfig) error {
 			}
 
 			p.AudioTranscoding = true
+			if p.VideoEnabled {
+				writeBlanks = true
+			}
 
 		case strings.EqualFold(track.Codec().MimeType, string(types.MimeTypeVP8)):
 			appSrcName = VideoAppSource

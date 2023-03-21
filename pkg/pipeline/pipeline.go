@@ -24,7 +24,7 @@ import (
 
 const (
 	pipelineSource = "pipeline"
-	eosTimeout     = time.Second * 15
+	eosTimeout     = time.Minute
 )
 
 type UpdateFunc func(context.Context, *livekit.EgressInfo)
