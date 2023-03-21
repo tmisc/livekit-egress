@@ -58,12 +58,12 @@ type AppWriter struct {
 	*TrackSynchronizer
 
 	// state
-	muted        atomic.Bool
-	playing      core.Fuse
-	draining     core.Fuse
-	drainTimeout time.Duration
-	force        core.Fuse
-	finished     core.Fuse
+	muted      atomic.Bool
+	playing    core.Fuse
+	eos        core.Fuse
+	eosTimeout time.Duration
+	force      core.Fuse
+	finished   core.Fuse
 
 	// vp8
 	firstPktPushed bool
@@ -89,8 +89,7 @@ func NewAppWriter(
 		sync:              sync,
 		TrackSynchronizer: syncInfo,
 		playing:           core.NewFuse(),
-		draining:          core.NewFuse(),
-		force:             core.NewFuse(),
+		eos:               core.NewFuse(),
 		finished:          core.NewFuse(),
 	}
 
@@ -100,20 +99,20 @@ func NewAppWriter(
 	case types.MimeTypeVP8:
 		depacketizer = &codecs.VP8Packet{}
 		maxLate = maxVideoLate
-		w.drainTimeout = videoTimeout
+		w.eosTimeout = videoTimeout
 		w.writePLI = func() { rp.WritePLI(track.SSRC()) }
 		w.vp8Munger = sfu.NewVP8Munger(w.logger)
 
 	case types.MimeTypeH264:
 		depacketizer = &codecs.H264Packet{}
 		maxLate = maxVideoLate
-		w.drainTimeout = videoTimeout
+		w.eosTimeout = videoTimeout
 		w.writePLI = func() { rp.WritePLI(track.SSRC()) }
 
 	case types.MimeTypeOpus:
 		depacketizer = &codecs.OpusPacket{}
 		maxLate = maxAudioLate
-		w.drainTimeout = audioTimeout
+		w.eosTimeout = audioTimeout
 
 	default:
 		return nil, errors.ErrNotSupported(track.Codec().MimeType)
@@ -127,14 +126,43 @@ func NewAppWriter(
 	}
 	w.sb = w.newSampleBuilder()
 
-	go w.start()
+	go w.run()
 	return w, nil
 }
 
-func (w *AppWriter) start() {
+// Play marks the track as playing
+func (w *AppWriter) Play() {
+	w.playing.Break()
+}
+
+// SetTrackMuted toggles track mute state
+func (w *AppWriter) SetTrackMuted(muted bool) {
+	if muted {
+		w.logger.Debugw("track muted", "timestamp", time.Since(w.startTime).Seconds())
+		w.muted.Store(true)
+	} else {
+		w.logger.Debugw("track unmuted", "timestamp", time.Since(w.startTime).Seconds())
+		w.muted.Store(false)
+		if w.writePLI != nil {
+			w.writePLI()
+		}
+	}
+}
+
+// EOS blocks until finished
+func (w *AppWriter) EOS() {
+	w.eos.Break()
+
+	// wait until finished
+	<-w.finished.Watch()
+}
+
+func (w *AppWriter) run() {
 	// always post EOS if the writer started playing
 	defer func() {
 		if w.playing.IsClosed() {
+			_ = w.pushPackets(true)
+
 			if flow := w.src.EndStream(); flow != gst.FlowOK && flow != gst.FlowFlushing {
 				w.logger.Errorw("unexpected flow return", nil, "flowReturn", flow.String())
 			}
@@ -146,46 +174,20 @@ func (w *AppWriter) start() {
 	w.startTime = time.Now()
 
 	first := true
-	force := w.force.Watch()
-
 	for {
-		select {
-		case <-force:
-			// force push remaining packets and quit
-			_ = w.pushPackets(true)
-			return
-
-		default:
-			// read next packet
-			_ = w.track.SetReadDeadline(time.Now().Add(time.Millisecond * 500))
-			pkt, _, err := w.track.ReadRTP()
-			if err != nil {
-				if w.draining.IsClosed() {
-					return
-				}
-
-				if w.muted.Load() {
-					// switch to writing blank frames
-					err = w.pushBlankFrames()
-					if err == nil {
-						continue
-					}
-				}
-
-				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-					continue
-				}
-
-				// log non-EOF errors
-				if !errors.Is(err, io.EOF) {
-					w.logger.Errorw("could not read packet", err)
-				}
-
-				// force push remaining packets and quit
-				_ = w.pushPackets(true)
+		// read next packet
+		_ = w.track.SetReadDeadline(time.Now().Add(time.Millisecond * 500))
+		pkt, _, err := w.track.ReadRTP()
+		if err != nil {
+			if w.eos.IsClosed() {
+				return
+			} else if isFatalReadError(err) {
+				w.logger.Errorw("could not read packet", err)
 				return
 			}
+		}
 
+		if pkt != nil {
 			// sync offsets after first packet read
 			// see comment in writeRTP below
 			if first {
@@ -197,16 +199,29 @@ func (w *AppWriter) start() {
 			w.sb.Push(pkt)
 
 			// push completed packets to appsrc
-			if err = w.pushPackets(false); err != nil {
-				if !errors.Is(err, io.EOF) {
-					w.logger.Errorw("could not push buffers", err)
+			err = w.pushPackets(false)
+		} else if w.playing.IsOpen() {
+			// pipeline not yet playing
+			continue
+		} else {
+			// track was muted, or EOF due to temporary disconnection
+			err = w.pushBlankFrames()
+		}
+
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				if w.eos.IsClosed() {
+					return
 				}
+			} else {
+				w.logger.Errorw("could not push buffers", err)
 				return
 			}
 		}
 	}
 }
 
+// pushPackets returns io.EOF once EOS has been received
 func (w *AppWriter) pushPackets(force bool) error {
 	// buffers can only be pushed to the appsrc while in the playing state
 	if w.playing.IsOpen() {
@@ -220,6 +235,7 @@ func (w *AppWriter) pushPackets(force bool) error {
 	}
 }
 
+// pushBlankFrames returns io.EOF once EOS has been received
 func (w *AppWriter) pushBlankFrames() error {
 	_ = w.pushPackets(true)
 
@@ -234,7 +250,7 @@ func (w *AppWriter) pushBlankFrames() error {
 
 		for {
 			<-ticker.C
-			if w.draining.IsClosed() || !w.muted.Load() {
+			if w.eos.IsClosed() || !w.muted.Load() {
 				return nil
 			}
 		}
@@ -253,30 +269,28 @@ func (w *AppWriter) pushBlankFrames() error {
 	defer ticker.Stop()
 
 	for {
-		if w.draining.IsClosed() {
-			return nil
-		}
+		var pkt *rtp.Packet
+		var err error
 
 		if !w.muted.Load() {
-			// once unmuted, read next packet to determine stopping point
-			// the blank frames should be ~500ms behind and need to fill the gap
-			_ = w.track.SetReadDeadline(time.Now().Add(time.Millisecond * 500))
-			pkt, _, err := w.track.ReadRTP()
+			_ = w.track.SetReadDeadline(time.Now().Add(frameDuration))
+			pkt, _, err = w.track.ReadRTP()
 			if err != nil {
-				// continue if read timeout
-				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-					continue
-				}
-
-				if !errors.Is(err, io.EOF) {
+				if w.eos.IsClosed() {
+					return io.EOF
+				} else if isFatalReadError(err) {
 					w.logger.Errorw("could not read packet", err)
+					return err
 				}
-				return err
 			}
+		}
 
+		if pkt != nil {
+			// once unmuted, next packet determines stopping point
+			// the blank frames will be ~500ms behind, and we need to fill the gap
 			maxTimestamp := pkt.Timestamp - tsStep
 			for {
-				ts := w.lastRTP + tsStep
+				ts := w.lastTS + tsStep
 				if ts > maxTimestamp {
 					// push packet to sample builder and return
 					w.sb.Push(pkt)
@@ -287,17 +301,18 @@ func (w *AppWriter) pushBlankFrames() error {
 					return err
 				}
 			}
-		}
-
-		<-ticker.C
-		// push blank frame
-		if err := w.pushBlankFrame(w.lastRTP + tsStep); err != nil {
-			return err
+		} else {
+			<-ticker.C
+			// push blank frame
+			if err = w.pushBlankFrame(w.lastTS + tsStep); err != nil {
+				return err
+			}
 		}
 	}
 }
 
-func (w *AppWriter) pushBlankFrame(timestamp uint32) error {
+// pushBlankFrame returns io.EOF once EOS has been received
+func (w *AppWriter) pushBlankFrame(rtpTS uint32) error {
 	pkt := &rtp.Packet{
 		Header: rtp.Header{
 			Version:        2,
@@ -305,7 +320,7 @@ func (w *AppWriter) pushBlankFrame(timestamp uint32) error {
 			Marker:         true,
 			PayloadType:    uint8(w.track.PayloadType()),
 			SequenceNumber: w.lastSN + 1,
-			Timestamp:      timestamp,
+			Timestamp:      rtpTS,
 			SSRC:           uint32(w.track.SSRC()),
 			CSRC:           []uint32{},
 		},
@@ -352,30 +367,35 @@ func (w *AppWriter) pushBlankFrame(timestamp uint32) error {
 	return nil
 }
 
+// push returns io.EOF if EOS has been received
 func (w *AppWriter) push(packets []*rtp.Packet, blankFrame bool) error {
 	for _, pkt := range packets {
-		// record timestamp diff
-		if w.rtpStep == 0 && !blankFrame && w.lastRTP != 0 && pkt.SequenceNumber == w.lastSN+1 {
-			w.rtpStep = pkt.Timestamp - w.lastRTP
-		}
-
-		// record SN and TS
-		w.lastSN = pkt.SequenceNumber
-		if w.lastRTP > wrapCheck && pkt.Timestamp < wrapCheck {
-			w.rtpWrap++
-		}
-		w.lastRTP = pkt.Timestamp
-
 		if !blankFrame {
 			// update sequence number
 			pkt.SequenceNumber += w.snOffset
+
+			// record timestamp diff
+			if w.rtpStep == 0 && w.lastTS != 0 && pkt.SequenceNumber == w.lastSN+1 {
+				if rtpStep := pkt.Timestamp - w.lastTS; rtpStep > 0 && rtpStep < uint32(maxUInt32/4) {
+					w.rtpStep = rtpStep
+				}
+			}
+
 			w.translatePacket(pkt)
 		}
 
-		// will return io.EOF if EOS has been sent
+		// get PTS
 		pts, err := w.getPTS(pkt.Timestamp)
 		if err != nil {
 			return err
+		}
+
+		// record timing info
+		w.lastSN = pkt.SequenceNumber
+		w.lastTS = pkt.Timestamp
+
+		if w.codec == types.MimeTypeOpus {
+			w.logger.Infow(".", "ts", pkt.Timestamp, "pts", pts, "offset", w.ptsOffset, "sn", pkt.SequenceNumber)
 		}
 
 		p, err := pkt.Marshal()
@@ -385,7 +405,9 @@ func (w *AppWriter) push(packets []*rtp.Packet, blankFrame bool) error {
 
 		b := gst.NewBufferFromBytes(p)
 		b.SetPresentationTimestamp(pts)
-		w.src.PushBuffer(b)
+		if ret := w.src.PushBuffer(b); ret != gst.FlowOK {
+			w.logger.Infow("flow return", "ret", ret)
+		}
 	}
 
 	return nil
@@ -451,36 +473,7 @@ func (w *AppWriter) translateVP8Packet(pkt *rtp.Packet, incomingVP8 *buffer.VP8,
 	return buf, err
 }
 
-func (w *AppWriter) Play() {
-	w.playing.Break()
-}
-
-func (w *AppWriter) SetTrackMuted(muted bool) {
-	if muted {
-		w.logger.Debugw("track muted", "timestamp", time.Since(w.startTime).Seconds())
-		w.muted.Store(true)
-	} else {
-		w.logger.Debugw("track unmuted", "timestamp", time.Since(w.startTime).Seconds())
-		w.muted.Store(false)
-		if w.writePLI != nil {
-			w.writePLI()
-		}
-	}
-}
-
-// Drain blocks until finished
-func (w *AppWriter) Drain(force bool) {
-	w.draining.Once(func() {
-		w.logger.Debugw("draining")
-
-		if force {
-			w.force.Break()
-		} else {
-			// wait until drainTimeout before force popping
-			time.AfterFunc(w.drainTimeout, w.force.Break)
-		}
-	})
-
-	// wait until finished
-	<-w.finished.Watch()
+func isFatalReadError(err error) bool {
+	netErr, isNetErr := err.(net.Error)
+	return !errors.Is(err, io.EOF) && (!isNetErr || !netErr.Timeout())
 }

@@ -14,10 +14,9 @@ import (
 )
 
 const (
-	largePTSDrift          = time.Millisecond * 20
-	massivePTSDrift        = time.Second
-	wrapCheck       uint32 = 2147483648
-	maxUInt32       int64  = 4294967296
+	largePTSDrift         = time.Millisecond * 20
+	massivePTSDrift       = time.Second
+	maxUInt32       int64 = 4294967296
 )
 
 // a single Synchronizer is shared between audio and video writers
@@ -43,15 +42,16 @@ type participantSynchronizer struct {
 type TrackSynchronizer struct {
 	sync.Mutex
 
-	trackID   string
-	clockRate int64
+	trackID  string
+	nsPerRTP float64 // nanoseconds per unit increase in RTP timestamp
 
-	firstRTP  int64  // first RTP timestamp received
-	lastRTP   uint32 // most recent RTP timestamp received
-	rtpWrap   int64  // number of times RTP timestamp has wrapped
-	rtpStep   uint32 // difference between RTP timestamps for sequential packets (used for blank frame insertion)
-	maxRTP    uint32 // maximum accepted RTP timestamp after EOS
-	ptsOffset int64  // presentation timestamp offset (used for a/v sync)
+	firstTS        int64  // first RTP timestamp received
+	lastTS         uint32 // most recent RTP timestamp received
+	lastTSAdjusted int64  // most recent RTP timestamp, adjusted for uint32 overflow
+	rtpStep        uint32 // difference between RTP timestamps for sequential packets (used for blank frame insertion)
+
+	maxPTS    int64 // maximum valid PTS (set after EOS)
+	ptsOffset int64 // presentation timestamp offset (used for a/v sync)
 
 	lastSN   uint16 // previous sequence number
 	snOffset uint16 // sequence number offset (increases with each blank frame inserted)
@@ -70,8 +70,9 @@ func NewSynchronizer(onFirstPacket func()) *Synchronizer {
 // addTrack creates track sync info
 func (s *Synchronizer) AddTrack(track *webrtc.TrackRemote, identity string) *TrackSynchronizer {
 	t := &TrackSynchronizer{
-		trackID:   track.ID(),
-		clockRate: int64(track.Codec().ClockRate),
+		trackID:        track.ID(),
+		nsPerRTP:       float64(1000000000) / float64(track.Codec().ClockRate),
+		lastTSAdjusted: -1,
 	}
 	s.Lock()
 	p := s.psByIdentity[identity]
@@ -110,7 +111,7 @@ func (s *Synchronizer) firstPacketForTrack(pkt *rtp.Packet) {
 	p.Unlock()
 
 	t.Lock()
-	t.firstRTP = int64(pkt.Timestamp)
+	t.firstTS = int64(pkt.Timestamp)
 	t.ptsOffset = now - s.firstPacket
 	t.Unlock()
 }
@@ -150,12 +151,16 @@ func (s *Synchronizer) OnRTCP(packet rtcp.Packet) {
 			ntpStarts := make(map[uint32]time.Time)
 			for _, report := range p.senderReports {
 				t := p.syncInfo[report.SSRC]
-				pts, _ := t.getPTS(report.RTPTime)
+				pts, err := t.getPTS(report.RTPTime)
+				if err != nil {
+					return
+				}
 				ntpStart := mediatransportutil.NtpTime(report.NTPTime).Time().Add(-pts)
 				if minNTPStart.IsZero() || ntpStart.Before(minNTPStart) {
 					minNTPStart = ntpStart
 				}
 				ntpStarts[report.SSRC] = ntpStart
+				logger.Infow("Sender report", "RTPTime", report.RTPTime, "PTS", pts, "ntpStart", ntpStart)
 			}
 			p.ntpStart = minNTPStart
 
@@ -204,65 +209,78 @@ func absGreater(value, max time.Duration) bool {
 }
 
 // getPTS calculates presentation timestamp from RTP timestamp
-func (t *TrackSynchronizer) getPTS(ts uint32) (time.Duration, error) {
+func (t *TrackSynchronizer) getPTS(rtpTS uint32) (time.Duration, error) {
 	t.Lock()
 	defer t.Unlock()
 
-	if t.maxRTP != 0 && ts > t.maxRTP {
+	// RTP packet timestamps start at a random number, and increase according to clock rate (for example, with a
+	// clock rate of 90kHz, the timestamp will increase by 90000 every second).
+	// They can also overflow uint32 and wrap back to 0.
+	// The conversion from rtp timestamp to presentation timestamp is done by:
+	// 1. Adjusting the rtp timestamp to account for uint32 wrap
+	// 2. Get total nanoseconds elapsed since the first packet, according to the clock rate
+	// 3. Adding an offset based on sender reports to sync this track with the others
+
+	// adjust timestamp for uint32 wrap if needed
+	tsAdjusted := int64(rtpTS)
+	if t.lastTSAdjusted != -1 {
+		diff := tsAdjusted - t.lastTSAdjusted
+		for diff > maxUInt32/2 {
+			tsAdjusted -= maxUInt32
+			diff -= maxUInt32
+		}
+		for diff < -maxUInt32/2 {
+			tsAdjusted += maxUInt32
+			diff += maxUInt32
+		}
+	}
+	t.lastTSAdjusted = tsAdjusted
+
+	// get ns elapsed since the first packet
+	nanoSecondsElapsed := int64(float64(tsAdjusted-t.firstTS) * t.nsPerRTP)
+
+	// add offset
+	pts := nanoSecondsElapsed + t.ptsOffset
+
+	// if past end time, return EOF
+	if t.maxPTS != 0 && pts > t.maxPTS {
 		return 0, io.EOF
 	}
 
-	// RTP packet timestamps start at a random number, and increase according to clock rate (for example, with a
-	// clock rate of 90kHz, the timestamp will increase by 90000 every second).
-	// The GStreamer clock time also starts at a random number, and increases in nanoseconds.
-	// The conversion is done by subtracting the initial RTP timestamp (tt.firstTS) from the current RTP timestamp
-	// and multiplying by a conversion rate of (1e9 ns/s / clock rate).
-	// Since the audio and video track might start pushing to their buffers at different times, we then add a
-	// synced clock offset (tt.ptsOffset), which is always 0 for the first track, and fixes the video starting to Play too
-	// early if it's waiting for a key frame
-	rtpWrap := t.rtpWrap
-	if ts < wrapCheck && t.lastRTP > wrapCheck {
-		rtpWrap++
-	}
-	rtpTS := int64(ts) + (rtpWrap * maxUInt32)
-	nanoSecondsElapsed := (rtpTS - t.firstRTP) * 1e9 / t.clockRate
-	return time.Duration(nanoSecondsElapsed + t.ptsOffset), nil
+	return time.Duration(pts), nil
 }
 
-// end updates maxRTP for each track
+// end updates maxPTS
 func (s *Synchronizer) End() {
 	endTime := time.Now().UnixNano()
 
 	s.Lock()
 	defer s.Unlock()
 
-	var maxDelay int64
+	var maxOffset int64
 	for _, p := range s.psByIdentity {
 		p.Lock()
 		for _, t := range p.syncInfo {
 			t.Lock()
-			if t.ptsOffset > maxDelay {
-				maxDelay = t.ptsOffset
+			if o := t.ptsOffset; o > maxOffset {
+				logger.Infow("new max offset", "offset", o)
+				maxOffset = o
 			}
 			t.Unlock()
 		}
 		p.Unlock()
 	}
 
-	s.endedAt = endTime + maxDelay
-	maxPTS := endTime - s.firstPacket + maxDelay
+	s.endedAt = endTime + maxOffset
+	maxPTS := s.endedAt - s.firstPacket
+
+	logger.Infow("Synchronizer End", "endedAt", s.endedAt, "firstPacket", s.firstPacket, "maxOffset", time.Duration(maxOffset), "maxPTS", time.Duration(maxPTS))
 
 	for _, p := range s.psByIdentity {
 		p.Lock()
 		for _, t := range p.syncInfo {
 			t.Lock()
-			maxNS := maxPTS - t.ptsOffset
-			maxCycles := maxNS * 1e9 / t.clockRate
-			maxRTP := maxCycles + t.firstRTP
-			for maxRTP >= maxUInt32 {
-				maxRTP -= maxUInt32
-			}
-			t.maxRTP = uint32(maxRTP)
+			t.maxPTS = maxPTS
 			t.Unlock()
 		}
 		p.Unlock()

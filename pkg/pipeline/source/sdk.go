@@ -96,7 +96,7 @@ func (s *SDKSource) GetEndTime() int64 {
 	return s.sync.GetEndedAt()
 }
 
-func (s *SDKSource) CloseWriters() {
+func (s *SDKSource) SendEOS() {
 	s.sync.End()
 
 	var wg sync.WaitGroup
@@ -104,7 +104,7 @@ func (s *SDKSource) CloseWriters() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			s.audioWriter.Drain(false)
+			s.audioWriter.EOS()
 			logger.Debugw("audio writer finished")
 		}()
 	}
@@ -112,7 +112,7 @@ func (s *SDKSource) CloseWriters() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			s.videoWriter.Drain(false)
+			s.videoWriter.EOS()
 			logger.Debugw("video writer finished")
 		}()
 	}
@@ -122,12 +122,12 @@ func (s *SDKSource) CloseWriters() {
 func (s *SDKSource) StreamStopped(name string) {
 	switch name {
 	case AudioAppSource:
-		s.audioWriter.Drain(true)
+		s.audioWriter.EOS()
 		if s.active.Dec() == 0 {
 			s.onDisconnected()
 		}
 	case VideoAppSource:
-		s.videoWriter.Drain(true)
+		s.videoWriter.EOS()
 		if s.active.Dec() == 0 {
 			s.onDisconnected()
 		}
@@ -184,41 +184,41 @@ func (s *SDKSource) joinRoom(p *config.PipelineConfig) error {
 		}
 		mu.Unlock()
 
-		var codec types.MimeType
 		var appSrcName string
 		var err error
 		writeBlanks := false
 
 		switch {
 		case strings.EqualFold(track.Codec().MimeType, string(types.MimeTypeOpus)):
-			codec = types.MimeTypeOpus
 			appSrcName = AudioAppSource
+
+			p.AudioInCodec = types.MimeTypeOpus
 			p.AudioEnabled = true
-			if p.AudioCodec != types.MimeTypeRaw {
-				p.AudioTranscoding = true
+			if p.AudioOutCodec == "" {
+				p.AudioOutCodec = types.MimeTypeOpus
 			}
-			if p.AudioCodec == "" {
-				p.AudioCodec = codec
+
+			p.AudioTranscoding = true
+
+		case strings.EqualFold(track.Codec().MimeType, string(types.MimeTypeVP8)):
+			appSrcName = VideoAppSource
+
+			p.VideoInCodec = types.MimeTypeVP8
+			p.VideoEnabled = true
+			if p.VideoOutCodec == "" {
+				if p.AudioEnabled {
+					// transcode to h264 for composite requests
+					p.VideoOutCodec = types.MimeTypeH264
+				} else {
+					p.VideoOutCodec = types.MimeTypeVP8
+				}
 			}
-			if p.VideoEnabled {
+
+			if p.VideoOutCodec != types.MimeTypeVP8 {
+				p.VideoTranscoding = true
 				writeBlanks = true
 			}
 
-		case strings.EqualFold(track.Codec().MimeType, string(types.MimeTypeVP8)):
-			codec = types.MimeTypeVP8
-			appSrcName = VideoAppSource
-			p.VideoEnabled = true
-
-			if p.VideoCodec == "" {
-				if p.AudioEnabled {
-					// transcode to h264 for composite requests
-					p.VideoCodec = types.MimeTypeH264
-					p.VideoTranscoding = true
-					writeBlanks = true
-				} else {
-					p.VideoCodec = types.MimeTypeVP8
-				}
-			}
 			if p.TrackID != "" {
 				if conf, ok := p.Outputs[types.EgressTypeFile]; ok {
 					conf.OutputType = types.OutputTypeWebM
@@ -226,12 +226,12 @@ func (s *SDKSource) joinRoom(p *config.PipelineConfig) error {
 			}
 
 		case strings.EqualFold(track.Codec().MimeType, string(types.MimeTypeH264)):
-			codec = types.MimeTypeH264
 			appSrcName = VideoAppSource
-			p.VideoEnabled = true
 
-			if p.VideoCodec == "" {
-				p.VideoCodec = types.MimeTypeH264
+			p.VideoInCodec = types.MimeTypeH264
+			p.VideoEnabled = true
+			if p.VideoOutCodec == "" {
+				p.VideoOutCodec = types.MimeTypeH264
 			}
 
 		default:
@@ -246,6 +246,11 @@ func (s *SDKSource) joinRoom(p *config.PipelineConfig) error {
 			return
 		}
 		appSrc := app.SrcFromElement(src)
+
+		codec := p.AudioOutCodec
+		if appSrcName == VideoAppSource {
+			codec = p.VideoOutCodec
+		}
 
 		writer, err := sdk.NewAppWriter(track, rp, codec, appSrc, s.sync, t, writeBlanks)
 		if err != nil {
@@ -364,7 +369,8 @@ func (s *SDKSource) onTrackMuteChanged(pub lksdk.TrackPublication, muted bool) {
 
 func (s *SDKSource) onTrackUnpublished(pub *lksdk.RemoteTrackPublication, _ *lksdk.RemoteParticipant) {
 	if w := s.getWriterForTrack(pub.SID()); w != nil {
-		w.Drain(true)
+		logger.Infow("track unpublished", "trackID", pub.SID(), "kind", pub.Kind())
+		w.EOS()
 		if s.active.Dec() == 0 {
 			s.onDisconnected()
 		}
@@ -372,6 +378,8 @@ func (s *SDKSource) onTrackUnpublished(pub *lksdk.RemoteTrackPublication, _ *lks
 }
 
 func (s *SDKSource) onDisconnected() {
+	logger.Infow("all tracks disconnected")
+
 	select {
 	case <-s.endRecording:
 		return

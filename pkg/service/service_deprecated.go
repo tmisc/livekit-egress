@@ -38,6 +38,7 @@ func (s *Service) runV0() error {
 			return nil
 
 		case msg := <-requests.Channel():
+			logger.Warnw("Using deprecated egress client. Upgrade livekit-server to v1.3.5+ and use egress:use_psrpc:true in your livekit config", nil)
 			deprecated := &livekit.StartEgressRequest{}
 			if err = proto.Unmarshal(requests.Payload(msg), deprecated); err != nil {
 				logger.Errorw("malformed request", err)

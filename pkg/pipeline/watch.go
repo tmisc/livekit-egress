@@ -49,6 +49,9 @@ func (p *Pipeline) messageWatch(msg *gst.Message) bool {
 
 	case gst.MessageElement:
 		err = p.handleMessageElement(msg)
+
+	default:
+		logger.Debugw(msg.String(), "messageType", msg.Type().String())
 	}
 
 	if err != nil {

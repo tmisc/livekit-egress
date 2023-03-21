@@ -149,9 +149,6 @@ func (a *AudioInput) buildSDKDecoder(p *config.PipelineConfig) error {
 		if err != nil {
 			return errors.ErrGstPipelineError(err)
 		}
-		if err = opusDec.SetProperty("use-inband-fec", true); err != nil {
-			return errors.ErrGstPipelineError(err)
-		}
 
 		a.decoder = append(a.decoder, rtpOpusDepay, opusDec)
 
@@ -228,7 +225,7 @@ func (a *AudioInput) buildMixer(p *config.PipelineConfig) error {
 }
 
 func (a *AudioInput) buildEncoder(p *config.PipelineConfig) error {
-	switch p.AudioCodec {
+	switch p.AudioOutCodec {
 	case types.MimeTypeOpus:
 		encoder, err := gst.NewElement("opusenc")
 		if err != nil {
@@ -249,8 +246,11 @@ func (a *AudioInput) buildEncoder(p *config.PipelineConfig) error {
 		}
 		a.encoder = encoder
 
+	case types.MimeTypeRawAudio:
+		return nil
+
 	default:
-		return errors.ErrNotSupported(string(p.AudioCodec))
+		return errors.ErrNotSupported(string(p.AudioOutCodec))
 	}
 
 	return nil
@@ -258,8 +258,8 @@ func (a *AudioInput) buildEncoder(p *config.PipelineConfig) error {
 
 func getCapsFilter(p *config.PipelineConfig) (*gst.Element, error) {
 	var caps *gst.Caps
-	switch p.AudioCodec {
-	case types.MimeTypeOpus, types.MimeTypeRaw:
+	switch p.AudioOutCodec {
+	case types.MimeTypeOpus, types.MimeTypeRawAudio:
 		caps = gst.NewCapsFromString(
 			"audio/x-raw,format=S16LE,layout=interleaved,rate=48000,channels=2",
 		)
@@ -268,7 +268,7 @@ func getCapsFilter(p *config.PipelineConfig) (*gst.Element, error) {
 			fmt.Sprintf("audio/x-raw,format=S16LE,layout=interleaved,rate=%d,channels=2", p.AudioFrequency),
 		)
 	default:
-		return nil, errors.ErrNotSupported(string(p.AudioCodec))
+		return nil, errors.ErrNotSupported(string(p.AudioOutCodec))
 	}
 
 	capsFilter, err := gst.NewElement("capsfilter")

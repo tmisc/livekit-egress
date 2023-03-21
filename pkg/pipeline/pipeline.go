@@ -24,7 +24,7 @@ import (
 
 const (
 	pipelineSource = "pipeline"
-	eosTimeout     = time.Second * 30
+	eosTimeout     = time.Second * 15
 )
 
 type UpdateFunc func(context.Context, *livekit.EgressInfo)
@@ -387,7 +387,7 @@ func (p *Pipeline) SendEOS(ctx context.Context) {
 				})
 
 				if p.SourceType == types.SourceTypeSDK {
-					p.src.(*source.SDKSource).CloseWriters()
+					p.src.(*source.SDKSource).SendEOS()
 				}
 
 				p.pipeline.SendEvent(gst.NewEOSEvent())
