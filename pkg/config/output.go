@@ -214,7 +214,7 @@ func (p *PipelineConfig) getEncodedFileConfig(req interface{}, file *livekit.Enc
 	updateOutputType := true
 
 	switch req.(type) {
-	case *livekit.TrackCompositeEgressRequest:
+	case *livekit.ParticipantCompositeEgressRequest, *livekit.TrackCompositeEgressRequest:
 		if file.FileType == livekit.EncodedFileType_DEFAULT_FILETYPE {
 			updateOutputType = false
 		}

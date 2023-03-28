@@ -21,12 +21,12 @@ require (
 	github.com/livekit/livekit-server v1.3.5-0.20230218061519-7a2d9b3d615e
 	github.com/livekit/mageutil v0.0.0-20230125210925-54e8a70427c1
 	github.com/livekit/mediatransportutil v0.0.0-20230130133657-96cfb115473a
-	github.com/livekit/protocol v1.5.0
+	github.com/livekit/protocol v1.5.2-0.20230328002607-fd25dae69a72
 	github.com/livekit/psrpc v0.2.9
 	github.com/livekit/server-sdk-go v1.0.8
 	github.com/pion/rtcp v1.2.10
 	github.com/pion/rtp v1.7.13
-	github.com/pion/webrtc/v3 v3.1.57
+	github.com/pion/webrtc/v3 v3.1.58
 	github.com/prometheus/client_golang v1.14.0
 	github.com/stretchr/testify v1.8.2
 	github.com/tinyzimmer/go-glib v0.0.25
@@ -35,7 +35,7 @@ require (
 	go.uber.org/atomic v1.10.0
 	google.golang.org/api v0.111.0
 	google.golang.org/grpc v1.53.0
-	google.golang.org/protobuf v1.28.1
+	google.golang.org/protobuf v1.30.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -73,7 +73,7 @@ require (
 	github.com/lithammer/shortuuid/v3 v3.0.7 // indirect
 	github.com/lithammer/shortuuid/v4 v4.0.0 // indirect
 	github.com/livekit/rtcscore-go v0.0.0-20220815072451-20ee10ae1995 // indirect
-	github.com/mackerelio/go-osstat v0.2.3 // indirect
+	github.com/mackerelio/go-osstat v0.2.4 // indirect
 	github.com/magefile/mage v1.14.0 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/mattn/go-ieproxy v0.0.1 // indirect

@@ -85,6 +85,13 @@ func (m *Monitor) checkCPUConfig(costConfig config.CPUCostConfig) error {
 			"recommended value", 3,
 		)
 	}
+	if costConfig.ParticipantCompositeCpuCost < 1 {
+		logger.Warnw("participant composite requirement too low", nil,
+			"config value", costConfig.ParticipantCompositeCpuCost,
+			"minimum value", 1,
+			"recommended value", 2,
+		)
+	}
 	if costConfig.TrackCompositeCpuCost < 1 {
 		logger.Warnw("track composite requirement too low", nil,
 			"config value", costConfig.TrackCompositeCpuCost,
@@ -103,6 +110,7 @@ func (m *Monitor) checkCPUConfig(costConfig config.CPUCostConfig) error {
 	requirements := []float64{
 		costConfig.RoomCompositeCpuCost,
 		costConfig.WebCpuCost,
+		costConfig.ParticipantCompositeCpuCost,
 		costConfig.TrackCompositeCpuCost,
 		costConfig.TrackCpuCost,
 	}
@@ -148,6 +156,8 @@ func (m *Monitor) CanAcceptRequest(req *rpc.StartEgressRequest) bool {
 		accept = available > m.cpuCostConfig.RoomCompositeCpuCost
 	case *rpc.StartEgressRequest_Web:
 		accept = available > m.cpuCostConfig.WebCpuCost
+	case *rpc.StartEgressRequest_Participant:
+		accept = available > m.cpuCostConfig.ParticipantCompositeCpuCost
 	case *rpc.StartEgressRequest_TrackComposite:
 		accept = available > m.cpuCostConfig.TrackCompositeCpuCost
 	case *rpc.StartEgressRequest_Track:
@@ -164,6 +174,8 @@ func (m *Monitor) AcceptRequest(req *rpc.StartEgressRequest) {
 		cpuHold = m.cpuCostConfig.RoomCompositeCpuCost
 	case *rpc.StartEgressRequest_Web:
 		cpuHold = m.cpuCostConfig.WebCpuCost
+	case *rpc.StartEgressRequest_Participant:
+		cpuHold = m.cpuCostConfig.ParticipantCompositeCpuCost
 	case *rpc.StartEgressRequest_TrackComposite:
 		cpuHold = m.cpuCostConfig.TrackCompositeCpuCost
 	case *rpc.StartEgressRequest_Track:
@@ -180,6 +192,8 @@ func (m *Monitor) EgressStarted(req *rpc.StartEgressRequest) {
 		m.requestGauge.With(prometheus.Labels{"type": "room_composite"}).Add(1)
 	case *rpc.StartEgressRequest_Web:
 		m.requestGauge.With(prometheus.Labels{"type": "web"}).Add(1)
+	case *rpc.StartEgressRequest_Participant:
+		m.requestGauge.With(prometheus.Labels{"type": "participant_composite"}).Add(1)
 	case *rpc.StartEgressRequest_TrackComposite:
 		m.requestGauge.With(prometheus.Labels{"type": "track_composite"}).Add(1)
 	case *rpc.StartEgressRequest_Track:
@@ -193,6 +207,8 @@ func (m *Monitor) EgressEnded(req *rpc.StartEgressRequest) {
 		m.requestGauge.With(prometheus.Labels{"type": "room_composite"}).Sub(1)
 	case *rpc.StartEgressRequest_Web:
 		m.requestGauge.With(prometheus.Labels{"type": "web"}).Sub(1)
+	case *rpc.StartEgressRequest_Participant:
+		m.requestGauge.With(prometheus.Labels{"type": "participant_composite"}).Sub(1)
 	case *rpc.StartEgressRequest_TrackComposite:
 		m.requestGauge.With(prometheus.Labels{"type": "track_composite"}).Sub(1)
 	case *rpc.StartEgressRequest_Track:

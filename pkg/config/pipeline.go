@@ -249,6 +249,33 @@ func (p *PipelineConfig) Update(request *rpc.StartEgressRequest) error {
 			return err
 		}
 
+	case *rpc.StartEgressRequest_Participant:
+		clone := proto.Clone(req.Participant).(*livekit.ParticipantCompositeEgressRequest)
+		p.Info.Request = &livekit.EgressInfo_ParticipantComposite{
+			ParticipantComposite: clone,
+		}
+		redactEncodedOutputs((*PCWrapper)(clone))
+
+		p.SourceType = types.SourceTypeSDK
+		p.Latency = sdkLatency
+
+		p.Info.RoomName = req.Participant.RoomName
+		p.ParticipantIdentity = req.Participant.ParticipantIdentity
+
+		// encoding options
+		switch opts := req.Participant.Options.(type) {
+		case *livekit.ParticipantCompositeEgressRequest_Preset:
+			p.applyPreset(opts.Preset)
+
+		case *livekit.ParticipantCompositeEgressRequest_Advanced:
+			p.applyAdvanced(opts.Advanced)
+		}
+
+		// output params
+		if err := p.updateEncodedOutputs((*PCWrapper)(req.Participant)); err != nil {
+			return err
+		}
+
 	case *rpc.StartEgressRequest_TrackComposite:
 		clone := proto.Clone(req.TrackComposite).(*livekit.TrackCompositeEgressRequest)
 		p.Info.Request = &livekit.EgressInfo_TrackComposite{

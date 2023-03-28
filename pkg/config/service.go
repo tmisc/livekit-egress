@@ -12,10 +12,11 @@ import (
 )
 
 const (
-	roomCompositeCpuCost  = 4.5
-	webCpuCost            = 4.5
-	trackCompositeCpuCost = 2
-	trackCpuCost          = 1
+	roomCompositeCpuCost        = 4.5
+	webCpuCost                  = 4.5
+	participantCompositeCpuCost = 2
+	trackCompositeCpuCost       = 2
+	trackCpuCost                = 1
 
 	defaultTemplatePort         = 7980
 	defaultTemplateBaseTemplate = "http://localhost:%d/"
@@ -33,10 +34,11 @@ type ServiceConfig struct {
 }
 
 type CPUCostConfig struct {
-	RoomCompositeCpuCost  float64 `yaml:"room_composite_cpu_cost"`
-	TrackCompositeCpuCost float64 `yaml:"track_composite_cpu_cost"`
-	TrackCpuCost          float64 `yaml:"track_cpu_cost"`
-	WebCpuCost            float64 `yaml:"web_cpu_cost"`
+	RoomCompositeCpuCost        float64 `yaml:"room_composite_cpu_cost"`
+	WebCpuCost                  float64 `yaml:"web_cpu_cost"`
+	ParticipantCompositeCpuCost float64 `yaml:"participant_composite_cpu_cost"`
+	TrackCompositeCpuCost       float64 `yaml:"track_composite_cpu_cost"`
+	TrackCpuCost                float64 `yaml:"track_cpu_cost"`
 }
 
 func NewServiceConfig(confString string) (*ServiceConfig, error) {
@@ -64,6 +66,9 @@ func NewServiceConfig(confString string) (*ServiceConfig, error) {
 	}
 	if conf.WebCpuCost <= 0 {
 		conf.WebCpuCost = webCpuCost
+	}
+	if conf.ParticipantCompositeCpuCost <= 0 {
+		conf.ParticipantCompositeCpuCost = participantCompositeCpuCost
 	}
 	if conf.TrackCompositeCpuCost <= 0 {
 		conf.TrackCompositeCpuCost = trackCompositeCpuCost

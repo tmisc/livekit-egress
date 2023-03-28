@@ -220,6 +220,9 @@ func getTypes(info *livekit.EgressInfo) (requestType string, outputType string) 
 	case *livekit.EgressInfo_Web:
 		requestType = "web"
 		outputType = getOutputType(req.Web)
+	case *livekit.EgressInfo_ParticipantComposite:
+		requestType = "participant_composite"
+		outputType = getOutputType((*config.PCWrapper)(req.ParticipantComposite))
 	case *livekit.EgressInfo_TrackComposite:
 		requestType = "track_composite"
 		outputType = getOutputType(req.TrackComposite)

@@ -20,7 +20,8 @@ func New(ctx context.Context, p *config.PipelineConfig) (Source, error) {
 		*livekit.EgressInfo_Web:
 		return NewWebSource(ctx, p)
 
-	case *livekit.EgressInfo_TrackComposite,
+	case *livekit.EgressInfo_ParticipantComposite,
+		*livekit.EgressInfo_TrackComposite,
 		*livekit.EgressInfo_Track:
 		return NewSDKSource(ctx, p)
 
