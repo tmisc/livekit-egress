@@ -135,7 +135,7 @@ func (s *WebSource) launchXvfb(ctx context.Context, p *config.PipelineConfig) er
 
 	dims := fmt.Sprintf("%dx%dx%d", p.Width, p.Height, p.Depth)
 	logger.Debugw("launching xvfb", "display", p.Display, "dims", dims)
-	xvfb := exec.Command("Xvfb", p.Display, "-screen", "0", dims, "-ac", "-nolisten", "tcp")
+	xvfb := exec.Command("Xvfb", p.Display, "-screen", "0", dims, "-ac", "-nolisten", "tcp", "-nolisten", "unix")
 	xvfb.Stderr = &errorLogger{cmd: "xvfb"}
 	if err := xvfb.Start(); err != nil {
 		return errors.Fatal(errors.ErrProcessStartFailed(err))
@@ -202,7 +202,7 @@ func (s *WebSource) launchChrome(ctx context.Context, p *config.PipelineConfig, 
 		chromedp.Flag("use-mock-keychain", true),
 
 		// custom args
-		// TODO: chromedp.Flag("no-sandbox", false),
+		chromedp.Flag("no-sandbox", false),
 		chromedp.Flag("kiosk", true),
 		chromedp.Flag("enable-automation", false),
 		chromedp.Flag("autoplay-policy", "no-user-gesture-required"),

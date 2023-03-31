@@ -61,15 +61,17 @@ RUN if [ "$TARGETPLATFORM" = "linux/arm64" ]; then ARCH=arm64v8; else ARCH=amd64
 
 # add root user to group for pulseaudio access
 RUN adduser root pulse-access
+RUN useradd -ms /bin/bash -g root -G sudo,pulse,pulse-access egress
+RUN mkdir -pv home/egress/.cache/xdgr && \
+    chown -R egress /home/egress && \
+    chmod 777 /home/egress
 
 # clean up
 RUN rm -rf /var/lib/apt/lists/* && \
-    rm -rf /var/run/pulse /var/lib/pulse /root/.config/pulse && \
-    mkdir -pv ~/.cache/xdgr
+    rm -rf /var/run/pulse /var/lib/pulse /root/.config/pulse
 
 # update env
-ENV PATH=${PATH}:/chrome
-ENV XDG_RUNTIME_DIR=$PATH:~/.cache/xdgr
+ENV XDG_RUNTIME_DIR=/home/egress/.cache/xdgr
 ENV RTSP_LOGDESTINATIONS=file
 
 COPY test/ /workspace/test/
@@ -82,4 +84,4 @@ COPY --from=0 /workspace/test.test .
 
 # run
 COPY build/test/entrypoint.sh .
-ENTRYPOINT ["./entrypoint.sh"]
+#ENTRYPOINT ["./entrypoint.sh"]

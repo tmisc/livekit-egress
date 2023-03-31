@@ -9,8 +9,8 @@ pulseaudio -D --verbose --exit-idle-time=-1 --system --disallow-exit
 
 # Run tests
 if [[ -z ${GITHUB_WORKFLOW+x} ]]; then
-  exec ./test.test -test.v -test.timeout 20m
+  su -m egress -c "PATH=${PATH}:/chrome exec ./test.test -test.v -test.timeout 20m"
 else
-  go install github.com/gotesttools/gotestfmt/v2/cmd/gotestfmt@latest
-  exec go tool test2json -p egress ./test.test -test.v -test.timeout 20m 2>&1 | "$HOME"/go/bin/gotestfmt
+  su -m egress -c "go install github.com/gotesttools/gotestfmt/v2/cmd/gotestfmt@latest"
+  su -m egress -c "exec go tool test2json -p egress ./test.test -test.v -test.timeout 20m 2>&1 | $HOME/go/bin/gotestfmt"
 fi
