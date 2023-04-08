@@ -11,7 +11,7 @@ require (
 	github.com/Azure/azure-storage-blob-go v0.15.0
 	github.com/aliyun/aliyun-oss-go-sdk v2.2.7+incompatible
 	github.com/aws/aws-sdk-go v1.44.239
-	github.com/chromedp/cdproto v0.0.0-20230329100754-6125fc8d7142
+	github.com/chromedp/cdproto v0.0.0-20230408222125-26b95782d8e2
 	github.com/chromedp/chromedp v0.9.1
 	github.com/frostbyte73/core v0.0.5
 	github.com/go-logr/logr v1.2.4
