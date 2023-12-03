@@ -90,6 +90,11 @@ func newS3Uploader(conf *config.EgressS3Upload) (uploader, error) {
 		awsConfig.Region = aws.String(conf.Region)
 	}
 
+	secure := os.Getenv("S3_SECURE")
+	if secure == "false" {
+		awsConfig.DisableSSL = aws.Bool(true)
+	}
+
 	u := &S3Uploader{
 		awsConfig: awsConfig,
 		bucket:    aws.String(conf.Bucket),
